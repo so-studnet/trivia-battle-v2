@@ -1,20 +1,22 @@
 "use client";
 
-import { useState } from "react";
-import { type Bet, BETS, type Game, other, type Seat, type Turn } from "@/lib/domain/game";
+import { useEffect, useState } from "react";
+import { type Bet, BETS, type Game, genreLabel, other, type Seat, type Turn } from "@/lib/domain/game";
+import { headToHead } from "@/lib/domain/stats";
 import type { RoomSession } from "@/lib/room/session";
 import type { Room } from "@/lib/room/types";
 import { getCard } from "@/lib/trivia";
-import { Avatar, Button, Panel, Spinner, TriviaText, TruthBadge } from "./ui";
+import { Avatar, Button, GenreBadge, Panel, Spinner, TriviaText, TruthBadge } from "./ui";
 
 interface Props {
   session: RoomSession;
   room: Room;
   seat: Seat;
   error: string | null;
+  onFeedback: () => void;
 }
 
-export function GameScreen({ session, room, seat, error }: Props) {
+export function GameScreen({ session, room, seat, error, onFeedback }: Props) {
   const game = room.state.game!;
   const names: Record<Seat, string> = { A: room.hostName, B: room.guestName ?? "ゲスト" };
   const target = room.state.settings.targetScore;
@@ -28,7 +30,15 @@ export function GameScreen({ session, room, seat, error }: Props) {
           {error}
         </p>
       )}
-      <Phase session={session} game={game} names={names} me={seat} target={target} />
+      <Phase
+        session={session}
+        game={game}
+        names={names}
+        me={seat}
+        target={target}
+        opponentId={(seat === "A" ? room.guestId : room.hostId) ?? ""}
+        onFeedback={onFeedback}
+      />
     </main>
   );
 }
@@ -115,12 +125,16 @@ function Phase({
   names,
   me,
   target,
+  opponentId,
+  onFeedback,
 }: {
   session: RoomSession;
   game: Game;
   names: Record<Seat, string>;
   me: Seat;
   target: number;
+  opponentId: string;
+  onFeedback: () => void;
 }) {
   const opponent = names[other(me)];
   const iAmQuestioner = game.questioner === me;
@@ -154,7 +168,17 @@ function Phase({
         />
       );
     case "over":
-      return <OverPhase session={session} game={game} names={names} me={me} target={target} />;
+      return (
+        <OverPhase
+          session={session}
+          game={game}
+          names={names}
+          me={me}
+          target={target}
+          opponentId={opponentId}
+          onFeedback={onFeedback}
+        />
+      );
   }
 }
 
@@ -183,10 +207,12 @@ function SelectPhase({ game, onDecide }: { game: Game; onDecide: (cardId: number
     <section className="flex flex-1 flex-col gap-3">
       <div>
         <h2 className="text-lg font-black">あなたが出題者です</h2>
-        <p className="text-sm text-muted">相手が間違えそうな雑学を1つ選びましょう（答えはあなたにだけ見えています）</p>
+        <p className="text-sm text-muted">
+          相手が間違えそうな雑学を1つ選びましょう。答えはあなたにだけ見えています。選ばなかったカードは手札に残ります。
+        </p>
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="radiogroup" aria-label="出題する雑学">
-        {game.hand.map((id, i) => {
+        {game.hands[game.questioner].map((id, i) => {
           const card = getCard(id);
           if (!card) return null;
           const active = selected === id;
@@ -202,7 +228,10 @@ function SelectPhase({ game, onDecide }: { game: Game; onDecide: (cardId: number
                 active ? "border-primary ring-4 ring-primary/20" : "border-border hover:border-primary/50"
               }`}
             >
-              <TruthBadge isTrue={card.isTrue} />
+              <span className="flex flex-wrap gap-1.5">
+                <TruthBadge isTrue={card.isTrue} />
+                <GenreBadge label={genreLabel(card.genre)} />
+              </span>
               <TriviaText text={card.text} />
             </button>
           );
@@ -223,8 +252,10 @@ function QuestionerWaiting({ game, opponent }: { game: Game; opponent: string })
     <section className="flex flex-1 flex-col gap-4">
       {card && (
         <Panel className="animate-fade-up flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-muted">あなたの出題</span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2 text-xs font-bold text-muted">
+              あなたの出題 <GenreBadge label={genreLabel(card.genre)} />
+            </span>
             <TruthBadge isTrue={card.isTrue} />
           </div>
           <TriviaText text={card.text} large />
@@ -253,7 +284,10 @@ function GuessPhase({ game, onGuess }: { game: Game; onGuess: (answer: boolean, 
   return (
     <section className="flex flex-1 flex-col gap-4">
       <h2 className="text-lg font-black">この雑学は本当？ウソ？</h2>
-      <Panel className="animate-pop flex min-h-40 items-center">
+      <Panel className="animate-pop flex min-h-40 flex-col justify-center gap-3">
+        <span>
+          <GenreBadge label={genreLabel(card.genre)} />
+        </span>
         <TriviaText text={card.text} large />
       </Panel>
 
@@ -299,7 +333,9 @@ function TurnSummary({ turn, names, me }: { turn: Turn; names: Record<Seat, stri
   return (
     <Panel className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold text-muted">答え</span>
+        <span className="flex items-center gap-2 text-xs font-bold text-muted">
+          答え <GenreBadge label={genreLabel(card.genre)} />
+        </span>
         <TruthBadge isTrue={card.isTrue} className="text-sm" />
       </div>
       <TriviaText text={card.text} />
@@ -365,15 +401,38 @@ function OverPhase({
   names,
   me,
   target,
+  opponentId,
+  onFeedback,
 }: {
   session: RoomSession;
   game: Game;
   names: Record<Seat, string>;
   me: Seat;
   target: number;
+  opponentId: string;
+  onFeedback: () => void;
 }) {
   const won = game.winner === me;
   const last = game.history[game.history.length - 1];
+  const [record, setRecord] = useState<{ wins: number; losses: number } | null>(null);
+
+  // この相手との通算成績（この対戦の結果も含む）
+  useEffect(() => {
+    let active = true;
+    session
+      .getStats()
+      .then((data) => {
+        if (!active) return;
+        const r = headToHead(data, opponentId);
+        // 記録の保存が間に合っていなければ、この対戦の結果を足して見せる
+        const counted = data.games.some((g) => g.id === game.id);
+        setRecord(counted ? r : { wins: r.wins + (won ? 1 : 0), losses: r.losses + (won ? 0 : 1) });
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [session, opponentId, game.id, won]);
   return (
     <section className="flex flex-1 flex-col gap-4">
       <div className="animate-pop py-2 text-center">
@@ -386,6 +445,11 @@ function OverPhase({
         <p className="mt-1 text-sm font-bold text-muted">
           {names.A} {game.scores.A} − {game.scores.B} {names.B}（{target}点先取）
         </p>
+        {record && (
+          <p className="mt-2 inline-block rounded-full bg-surface-2 px-3 py-1 text-sm font-bold" data-testid="head-to-head">
+            {names[other(me)]}さんとの通算 {record.wins}勝{record.losses}敗
+          </p>
+        )}
       </div>
 
       {last && (
@@ -403,9 +467,10 @@ function OverPhase({
             if (!card) return null;
             return (
               <li key={i} className="border-t border-border pt-3 first:border-0 first:pt-0">
-                <div className="mb-1 flex items-center gap-2">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
                   <span className="text-xs font-black text-muted">第{i + 1}問</span>
                   <TruthBadge isTrue={card.isTrue} />
+                  <GenreBadge label={genreLabel(card.genre)} />
                   <span className="text-xs text-muted">
                     {names[t.scorer]}さんに+{t.bet}
                   </span>
@@ -417,6 +482,10 @@ function OverPhase({
           })}
         </ol>
       </details>
+
+      <button type="button" onClick={onFeedback} className="self-center text-sm font-bold text-muted underline underline-offset-2">
+        問題の間違いや感想を送る
+      </button>
 
       <div className="mt-auto flex gap-3 pt-2">
         <Button variant="outline" className="flex-1" onClick={() => session.leaveRoom()}>

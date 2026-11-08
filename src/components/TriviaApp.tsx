@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { getRoomClient } from "@/lib/room/client";
 import { RoomSession } from "@/lib/room/session";
 import { seatOf } from "@/lib/room/types";
 import { TRIVIA } from "@/lib/trivia";
+import { FeedbackDialog } from "./FeedbackDialog";
 import { GameScreen } from "./GameScreen";
 import { LobbyScreen } from "./LobbyScreen";
+import { LoginScreen } from "./LoginScreen";
+import { StatsScreen } from "./StatsScreen";
 import { TitleScreen } from "./TitleScreen";
 import { Spinner } from "./ui";
 
@@ -20,6 +23,8 @@ function getSession(): RoomSession {
 export function TriviaApp() {
   const s = getSession();
   const snap = useSyncExternalStore(s.subscribe, s.getSnapshot, s.getServerSnapshot);
+  const [view, setView] = useState<"title" | "stats">("title");
+  const [feedbackFrom, setFeedbackFrom] = useState<string | null>(null);
 
   useEffect(() => {
     void s.restore();
@@ -32,8 +37,39 @@ export function TriviaApp() {
     return () => clearTimeout(t);
   }, [snap.notice, s]);
 
-  const room = snap.room;
-  const seat = room ? seatOf(room, snap.userId) : null;
+  const { player, room } = snap;
+  const seat = room ? seatOf(room, player?.id ?? null) : null;
+  const openFeedback = (page: string) => setFeedbackFrom(page);
+
+  let screen;
+  if (snap.restoring) {
+    screen = (
+      <div className="grid flex-1 place-items-center">
+        <Spinner className="size-8" />
+      </div>
+    );
+  } else if (!player) {
+    screen = <LoginScreen session={s} busy={snap.busy} error={snap.error} onFeedback={() => openFeedback("login")} />;
+  } else if (room && seat) {
+    screen = room.state.game ? (
+      <GameScreen session={s} room={room} seat={seat} error={snap.error} onFeedback={() => openFeedback("game")} />
+    ) : (
+      <LobbyScreen session={s} room={room} seat={seat} error={snap.error} />
+    );
+  } else if (view === "stats") {
+    screen = <StatsScreen session={s} player={player} onBack={() => setView("title")} />;
+  } else {
+    screen = (
+      <TitleScreen
+        session={s}
+        player={player}
+        busy={snap.busy}
+        error={snap.error}
+        onStats={() => setView("stats")}
+        onFeedback={() => openFeedback("title")}
+      />
+    );
+  }
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
@@ -46,20 +82,8 @@ export function TriviaApp() {
           {snap.notice}
         </div>
       )}
-
-      {snap.restoring ? (
-        <div className="grid flex-1 place-items-center">
-          <Spinner className="size-8" />
-        </div>
-      ) : room && seat ? (
-        room.state.game ? (
-          <GameScreen session={s} room={room} seat={seat} error={snap.error} />
-        ) : (
-          <LobbyScreen session={s} room={room} seat={seat} error={snap.error} />
-        )
-      ) : (
-        <TitleScreen session={s} busy={snap.busy} error={snap.error} />
-      )}
+      {screen}
+      <FeedbackDialog session={s} page={feedbackFrom} onClose={() => setFeedbackFrom(null)} />
     </div>
   );
 }
