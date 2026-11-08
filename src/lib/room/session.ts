@@ -1,15 +1,25 @@
-// 画面から使う「いま入っている部屋」の状態と操作。
+// 画面から使う「ログイン状態」と「いま入っている部屋」の状態と操作。
 // 画面は useSyncExternalStore で snapshot を読む。
-import { type Action, reduce, type RuleContext, type TriviaCard } from "@/lib/domain/game";
-import { type Room, RoomError, type RoomClient, seatOf } from "./types";
+import { type Action, type DealInfo, reduce, type RuleContext, type TriviaCard } from "@/lib/domain/game";
+import type { StatsData } from "@/lib/domain/stats";
+import {
+  type FeedbackInput,
+  type LoginResult,
+  type Player,
+  type Room,
+  RoomError,
+  type RoomClient,
+  randomUuid,
+  seatOf,
+} from "./types";
 
 const CURRENT_ROOM_KEY = "trivia-battle:current-room";
 
 export interface SessionSnapshot {
-  /** 起動直後の「前の部屋に戻れるか」の確認中 */
+  /** 起動直後の「ログイン済みか・前の部屋に戻れるか」の確認中 */
   restoring: boolean;
   busy: boolean;
-  userId: string | null;
+  player: Player | null;
   room: Room | null;
   error: string | null;
   /** 相手の退出など、知らせたいこと */
@@ -19,7 +29,7 @@ export interface SessionSnapshot {
 const INITIAL: SessionSnapshot = {
   restoring: true,
   busy: false,
-  userId: null,
+  player: null,
   room: null,
   error: null,
   notice: null,
@@ -33,6 +43,10 @@ function storage(): Storage | null {
   }
 }
 
+function message(e: unknown): string {
+  return e instanceof RoomError || e instanceof Error ? e.message : String(e);
+}
+
 export class RoomSession {
   private snapshot: SessionSnapshot = INITIAL;
   private listeners = new Set<() => void>();
@@ -43,6 +57,7 @@ export class RoomSession {
     private readonly client: RoomClient,
     private readonly cards: readonly TriviaCard[],
     private readonly random: () => number = Math.random,
+    private readonly now: () => number = Date.now,
   ) {}
 
   get kind() {
@@ -63,6 +78,10 @@ export class RoomSession {
     for (const l of this.listeners) l();
   }
 
+  private get userId() {
+    return this.snapshot.player?.id ?? null;
+  }
+
   clearError() {
     this.set({ error: null });
   }
@@ -71,42 +90,59 @@ export class RoomSession {
     this.set({ notice: null });
   }
 
-  /** 再読み込みしたときに、入っていた部屋へ戻る */
+  /** 起動時: この端末でログインしていればそのまま使い、入っていた部屋へ戻る */
   async restore(): Promise<void> {
-    const id = storage()?.getItem(CURRENT_ROOM_KEY);
-    if (!id) {
-      this.set({ restoring: false });
-      return;
-    }
     try {
-      const userId = await this.client.init();
-      const room = await this.client.fetchRoom(id);
-      if (room && !room.closed && seatOf(room, userId)) {
-        this.set({ userId });
-        this.enter(room);
-      } else {
-        storage()?.removeItem(CURRENT_ROOM_KEY);
+      const player = await this.client.restoreLogin();
+      this.set({ player });
+      const id = storage()?.getItem(CURRENT_ROOM_KEY);
+      if (player && id) {
+        const room = await this.client.fetchRoom(id);
+        if (room && !room.closed && seatOf(room, player.id)) this.enter(room);
+        else storage()?.removeItem(CURRENT_ROOM_KEY);
       }
     } catch {
-      // 戻れなければタイトルから
+      // 戻れなければログイン画面・タイトルから
     } finally {
       this.set({ restoring: false });
     }
   }
 
+  /** メールアドレスでログインする。未登録なら "new" を返す（登録画面に進む） */
+  async login(email: string): Promise<LoginResult["status"] | null> {
+    let result: LoginResult | null = null;
+    await this.run(async () => {
+      result = await this.client.login(email);
+      if (result.status === "ok") this.set({ player: result.player });
+    });
+    return (result as LoginResult | null)?.status ?? null;
+  }
+
+  register(email: string, nickname: string) {
+    return this.run(async () => {
+      this.set({ player: await this.client.register(email, nickname) });
+    });
+  }
+
+  async logout() {
+    this.leaveRoom();
+    await this.client.logout().catch(() => {});
+    this.set({ player: null, error: null });
+  }
+
   createRoom(name: string) {
     return this.run(async () => {
-      const userId = await this.client.init();
-      this.set({ userId });
-      this.enter(await this.client.createRoom(name));
+      const room = await this.client.createRoom(name);
+      this.rename(name);
+      this.enter(room);
     });
   }
 
   joinRoom(code: string, name: string) {
     return this.run(async () => {
-      const userId = await this.client.init();
-      this.set({ userId });
-      this.enter(await this.client.joinRoom(code, name));
+      const room = await this.client.joinRoom(code, name);
+      this.rename(name);
+      this.enter(room);
     });
   }
 
@@ -114,6 +150,14 @@ export class RoomSession {
     const room = this.snapshot.room;
     this.exit();
     if (room) void this.client.leaveRoom(room.id).catch(() => {});
+  }
+
+  getStats(): Promise<StatsData> {
+    return this.client.getStats();
+  }
+
+  sendFeedback(input: FeedbackInput): Promise<void> {
+    return this.client.sendFeedback(input);
   }
 
   /** ゲームの操作。相手と同時に更新してぶつかったら、最新を読み直してやり直す */
@@ -124,11 +168,26 @@ export class RoomSession {
   }
 
   private async dispatchNow(action: Action) {
+    let deal: DealInfo | undefined;
     for (let attempt = 0; attempt < 5; attempt++) {
       const room = this.snapshot.room;
-      const seat = room && seatOf(room, this.snapshot.userId);
+      const seat = room && seatOf(room, this.userId);
       if (!room || !seat) return;
-      const ctx: RuleContext = { cards: this.cards, random: this.random, hasGuest: !!room.guestId };
+      try {
+        // 対戦を始めるときは、2人が出会った問題をサーバーから受け取って配る
+        if (action.type === "start" && !deal && !room.state.game) deal = await this.client.getDealInfo(room.id);
+      } catch (e) {
+        this.set({ error: message(e) });
+        return;
+      }
+      const ctx: RuleContext = {
+        cards: this.cards,
+        random: this.random,
+        hasGuest: !!room.guestId,
+        now: this.now,
+        newId: randomUuid,
+        deal,
+      };
       const next = reduce(room.state, seat, action, ctx);
       if (!next) return; // ルール上できない操作（すでに相手が進めた等）
       // 画面はすぐに変える（楽観的更新）
@@ -147,7 +206,8 @@ export class RoomSession {
         this.applyRoom(latest, true);
       } catch (e) {
         this.applyRoom(room, true);
-        this.set({ error: e instanceof Error ? e.message : String(e) });
+        if (e instanceof RoomError && e.code === "not_logged_in") await this.logout();
+        this.set({ error: message(e) });
         return;
       }
     }
@@ -159,10 +219,17 @@ export class RoomSession {
     try {
       await fn();
     } catch (e) {
-      this.set({ error: e instanceof RoomError || e instanceof Error ? e.message : String(e) });
+      if (e instanceof RoomError && e.code === "not_logged_in") await this.logout();
+      this.set({ error: message(e) });
     } finally {
       this.set({ busy: false });
     }
+  }
+
+  private rename(name: string) {
+    const p = this.snapshot.player;
+    const n = name.trim();
+    if (p && n && p.nickname !== n) this.set({ player: { ...p, nickname: n } });
   }
 
   private enter(room: Room) {
@@ -184,7 +251,7 @@ export class RoomSession {
     const prev = this.snapshot.room;
     if (!prev || prev.id !== next.id) return;
     if (!force && next.version <= prev.version) return;
-    const me = this.snapshot.userId;
+    const me = this.userId;
     if (next.closed) {
       this.exit(prev.hostId === me ? null : `${next.hostName}さん（ホスト）が部屋を出たため、部屋は閉じられました。`);
       return;

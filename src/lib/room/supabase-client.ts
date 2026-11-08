@@ -1,56 +1,29 @@
-// Supabase を使った部屋。
+// Supabase を使ったサーバーとのやりとり。
 // ほかのアプリと同じ Supabase プロジェクトに同居できるよう、Supabase Auth は使わない。
-// - 本人確認は端末で作った token（合言葉）で行い、部屋の操作はすべて trivia_battle_* の RPC で行う
+// - ログインはメールアドレスだけ。サーバーが発行したセッション token をこの端末に保存し、
+//   以後の RPC はこの token で本人確認する（同じ端末・同じブラウザならログインを省ける）
+// - 部屋の操作はすべて trivia_battle_* の RPC で行う
 // - 相手への通知は Realtime Broadcast（「部屋が変わったよ」とだけ送り、受け取った側が読み直す）
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import type { RoomState } from "@/lib/domain/game";
-import { type RoomRow, rowToRoom, toRoomError } from "./rows";
+import type { DealInfo, RoomState } from "@/lib/domain/game";
+import type { StatsData } from "@/lib/domain/stats";
+import { type PlayerRow, type RoomRow, rowToPlayer, rowToRoom, toRoomError } from "./rows";
 import {
+  type FeedbackInput,
+  type LoginResult,
+  type Player,
   type Room,
   RoomError,
   type RoomClient,
   isValidCode,
+  isValidEmail,
   normalizeCode,
+  normalizeEmail,
   normalizeName,
 } from "./types";
 
-const IDENTITY_KEY = "trivia-battle:player:v1";
+const SESSION_KEY = "trivia-battle:session:v1";
 const EVENT = "changed";
-
-export interface PlayerIdentity {
-  playerId: string; // 相手にも見える ID
-  token: string; // 本人だけが知る合言葉
-}
-
-function randomUuid(): string {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  // randomUUID は https / localhost でしか使えないので、その代わり
-  const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** この端末のプレイヤーを読み出す（なければつくって保存する） */
-export function loadIdentity(storage: Storage | null): PlayerIdentity {
-  try {
-    const raw = storage?.getItem(IDENTITY_KEY);
-    const parsed = raw ? (JSON.parse(raw) as Partial<PlayerIdentity>) : null;
-    if (parsed && UUID.test(parsed.playerId ?? "") && UUID.test(parsed.token ?? "")) {
-      return { playerId: parsed.playerId!, token: parsed.token! };
-    }
-  } catch {
-    // 壊れていたらつくり直す
-  }
-  const id = { playerId: randomUuid(), token: randomUuid() };
-  try {
-    storage?.setItem(IDENTITY_KEY, JSON.stringify(id));
-  } catch {}
-  return id;
-}
 
 export function topicOf(roomId: string): string {
   return `trivia-battle:room:${roomId}`;
@@ -58,22 +31,28 @@ export function topicOf(roomId: string): string {
 
 export class SupabaseRoomClient implements RoomClient {
   readonly kind = "supabase" as const;
-  private identity: PlayerIdentity | null = null;
   private channels = new Map<string, RealtimeChannel>();
 
   constructor(
     private readonly sb: SupabaseClient,
     private readonly storage: () => Storage | null = () =>
       typeof localStorage === "undefined" ? null : localStorage,
+    private readonly fetchImpl: typeof fetch = (...args) => fetch(...args),
   ) {}
 
-  private me(): PlayerIdentity {
-    this.identity ??= loadIdentity(this.storage());
-    return this.identity;
+  private get token(): string | null {
+    try {
+      return this.storage()?.getItem(SESSION_KEY) ?? null;
+    } catch {
+      return null;
+    }
   }
 
-  async init(): Promise<string> {
-    return this.me().playerId;
+  private set token(value: string | null) {
+    try {
+      if (value) this.storage()?.setItem(SESSION_KEY, value);
+      else this.storage()?.removeItem(SESSION_KEY);
+    } catch {}
   }
 
   private async call(fn: string, args: Record<string, unknown>): Promise<unknown> {
@@ -82,15 +61,49 @@ export class SupabaseRoomClient implements RoomClient {
     return data;
   }
 
+  private loggedIn(data: unknown): Player {
+    const d = data as { token: string; player: PlayerRow };
+    this.token = d.token;
+    return rowToPlayer(d.player);
+  }
+
+  async restoreLogin(): Promise<Player | null> {
+    const token = this.token;
+    if (!token) return null;
+    const data = await this.call("trivia_battle_me", { p_token: token });
+    if (!data) {
+      this.token = null;
+      return null;
+    }
+    return rowToPlayer(data as PlayerRow);
+  }
+
+  async login(rawEmail: string): Promise<LoginResult> {
+    const email = normalizeEmail(rawEmail);
+    if (!isValidEmail(email)) throw new RoomError("invalid_email");
+    const data = (await this.call("trivia_battle_login", { p_email: email })) as { status: string };
+    if (data.status === "new") return { status: "new" };
+    return { status: "ok", player: this.loggedIn(data) };
+  }
+
+  async register(rawEmail: string, nickname: string): Promise<Player> {
+    const email = normalizeEmail(rawEmail);
+    if (!isValidEmail(email)) throw new RoomError("invalid_email");
+    const n = normalizeName(nickname);
+    if (!n) throw new RoomError("invalid_name");
+    return this.loggedIn(await this.call("trivia_battle_register", { p_email: email, p_nickname: n }));
+  }
+
+  async logout(): Promise<void> {
+    const token = this.token;
+    this.token = null;
+    if (token) await this.call("trivia_battle_logout", { p_token: token }).catch(() => {});
+  }
+
   async createRoom(name: string): Promise<Room> {
     const n = normalizeName(name);
     if (!n) throw new RoomError("invalid_name");
-    const { playerId, token } = this.me();
-    const data = await this.call("trivia_battle_create_room", {
-      p_player_id: playerId,
-      p_token: token,
-      p_name: n,
-    });
+    const data = await this.call("trivia_battle_create_room", { p_token: this.token, p_name: n });
     return rowToRoom(data as RoomRow);
   }
 
@@ -99,20 +112,14 @@ export class SupabaseRoomClient implements RoomClient {
     if (!isValidCode(code)) throw new RoomError("invalid_code");
     const n = normalizeName(name);
     if (!n) throw new RoomError("invalid_name");
-    const { playerId, token } = this.me();
-    const data = await this.call("trivia_battle_join_room", {
-      p_code: code,
-      p_player_id: playerId,
-      p_token: token,
-      p_name: n,
-    });
+    const data = await this.call("trivia_battle_join_room", { p_code: code, p_token: this.token, p_name: n });
     // 相手への参加の知らせは、subscribe でつながったときに送る（ここで一時的なチャンネルをつくると、
     // supabase-js が同じ名前のチャンネルを使い回すため、直後の購読が消えてしまう）
     return rowToRoom(data as RoomRow);
   }
 
   async fetchRoom(id: string): Promise<Room | null> {
-    const data = await this.call("trivia_battle_get_room", { p_room_id: id, p_token: this.me().token });
+    const data = await this.call("trivia_battle_get_room", { p_room_id: id, p_token: this.token });
     return data ? rowToRoom(data as RoomRow) : null;
   }
 
@@ -121,7 +128,7 @@ export class SupabaseRoomClient implements RoomClient {
     try {
       data = await this.call("trivia_battle_save_state", {
         p_room_id: room.id,
-        p_token: this.me().token,
+        p_token: this.token,
         p_version: room.version,
         p_state: state,
       });
@@ -136,8 +143,34 @@ export class SupabaseRoomClient implements RoomClient {
   }
 
   async leaveRoom(id: string): Promise<void> {
-    await this.call("trivia_battle_leave_room", { p_room_id: id, p_token: this.me().token });
+    await this.call("trivia_battle_leave_room", { p_room_id: id, p_token: this.token });
     this.notify(id);
+  }
+
+  async getDealInfo(roomId: string): Promise<DealInfo> {
+    const data = (await this.call("trivia_battle_deal_info", { p_room_id: roomId, p_token: this.token })) as DealInfo;
+    return { seenAt: data?.seenAt ?? {}, hands: { A: data?.hands?.A ?? [], B: data?.hands?.B ?? [] } };
+  }
+
+  async getStats(): Promise<StatsData> {
+    const data = (await this.call("trivia_battle_my_stats", { p_token: this.token })) as StatsData;
+    return { answers: data?.answers ?? [], games: data?.games ?? [], seenCount: data?.seenCount ?? 0 };
+  }
+
+  async sendFeedback(input: FeedbackInput): Promise<void> {
+    let res: Response;
+    try {
+      res = await this.fetchImpl("/api/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: this.token, message: input.message, page: input.page }),
+      });
+    } catch {
+      throw new RoomError("network");
+    }
+    if (res.ok) return;
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw toRoomError({ message: body.error ?? `status ${res.status}` });
   }
 
   /** 相手に「部屋が変わった」と知らせる。届かなくても相手は定期的に読み直すので、失敗は無視する */
@@ -145,9 +178,7 @@ export class SupabaseRoomClient implements RoomClient {
     const ch = this.channels.get(roomId);
     if (ch) {
       const sent =
-        ch.state === "joined"
-          ? ch.send({ type: "broadcast", event: EVENT, payload: {} })
-          : ch.httpSend(EVENT, {});
+        ch.state === "joined" ? ch.send({ type: "broadcast", event: EVENT, payload: {} }) : ch.httpSend(EVENT, {});
       void sent.catch(() => {});
       return;
     }

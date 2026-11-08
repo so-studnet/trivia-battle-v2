@@ -1,6 +1,6 @@
 // 雑学カードバトルのルール（純粋関数）。
 // 画面や通信から切り離してあり、Vitest でテストする。
-// 部屋の状態（RoomState）は Supabase の rooms.state(jsonb) にそのまま保存される。
+// 部屋の状態（RoomState）は Supabase の trivia_battle_rooms.state(jsonb) にそのまま保存される。
 
 export type Seat = "A" | "B"; // A = ホスト, B = ゲスト
 export type FirstPlayerMode = Seat | "random";
@@ -12,11 +12,37 @@ export const DEFAULT_TARGET = 3;
 export const HAND_SIZE = 4;
 export const BETS: readonly Bet[] = [1, 2, 3];
 
+export type Genre =
+  | "animals"
+  | "space"
+  | "science"
+  | "body"
+  | "geography"
+  | "history"
+  | "food"
+  | "culture";
+
+export const GENRES: readonly { id: Genre; label: string }[] = [
+  { id: "animals", label: "生き物" },
+  { id: "space", label: "宇宙・地球" },
+  { id: "science", label: "科学" },
+  { id: "body", label: "人体" },
+  { id: "geography", label: "地理" },
+  { id: "history", label: "歴史" },
+  { id: "food", label: "食べ物" },
+  { id: "culture", label: "文化・スポーツ" },
+];
+
+export function genreLabel(genre: string): string {
+  return GENRES.find((g) => g.id === genre)?.label ?? genre;
+}
+
 export interface TriviaCard {
   id: number;
   text: string;
   isTrue: boolean;
   explanation: string;
+  genre: Genre;
 }
 
 export interface Settings {
@@ -36,16 +62,34 @@ export interface Turn {
 
 export type Phase = "select" | "guess" | "result" | "over";
 
+/**
+ * 対戦開始時にサーバーから受け取る、2人の「出会った問題」の情報。
+ * 出会った問題（手札に配られた・出題された）は、できるだけ二度と配らない。
+ */
+export interface DealInfo {
+  /** 2人のどちらかが出会ったことのある問題と、最後に出会った時刻（ミリ秒） */
+  seenAt: Record<string, number>;
+  /** 前の対戦から持ち越した手札（新しい相手がまだ出会っていないものだけ） */
+  hands: Record<Seat, number[]>;
+}
+
 export interface Game {
+  id: string; // 対戦ごとの ID（成績の記録に使う）
+  startedAt: number;
   round: number;
   firstPlayer: Seat;
   questioner: Seat;
   phase: Phase;
   scores: Record<Seat, number>;
-  hand: number[]; // 出題者に配られたカード
+  /**
+   * それぞれの手札。出題で使わなかったカードは手札に残り、
+   * 次に出題者になったときに足りない分だけ補充する（対戦が終わっても次の対戦に持ち越す）。
+   */
+  hands: Record<Seat, number[]>;
+  /** 2人のどちらかが出会った問題と、その時刻。ここにある問題は新しく配らない */
+  seenAt: Record<string, number>;
   cardId: number | null; // 出題中のカード
   acks: Seat[]; // 結果画面で「次へ」を押した人
-  usedIds: number[];
   history: Turn[];
   winner: Seat | null;
 }
@@ -69,6 +113,10 @@ export interface RuleContext {
   cards: readonly TriviaCard[];
   random: () => number; // 0 以上 1 未満
   hasGuest: boolean;
+  now: () => number;
+  newId: () => string;
+  /** 対戦開始（start）のときに使う。なければ「2人とも何も出会っていない」として配る */
+  deal?: DealInfo;
 }
 
 export function initialRoomState(): RoomState {
@@ -102,42 +150,118 @@ export function resolveFirstPlayer(mode: FirstPlayerMode, random: () => number):
   return random() < 0.5 ? "A" : "B";
 }
 
-/** 未使用のカードから HAND_SIZE 枚を配る。足りなければ使用済みをリセットする。 */
-export function drawHand(
+function shuffled<T>(items: readonly T[], random: () => number): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * seat の手札を HAND_SIZE 枚まで補充する。
+ * 1. 2人とも出会っていない問題から、手札のジャンルがなるべくばらけるように選ぶ
+ * 2. 足りなければ、この対戦より前に出会った問題を、出会ったのが古い順に選ぶ
+ * 配った問題は seenAt に記録する。元のオブジェクトは変えない。
+ */
+export function refillHand(
+  game: Pick<Game, "hands" | "seenAt" | "startedAt">,
+  seat: Seat,
   cards: readonly TriviaCard[],
-  usedIds: readonly number[],
   random: () => number,
-): { hand: number[]; usedIds: number[] } {
-  const used = new Set(usedIds);
-  let pool = cards.filter((c) => !used.has(c.id)).map((c) => c.id);
-  let nextUsed = [...usedIds];
-  if (pool.length < HAND_SIZE) {
-    pool = cards.map((c) => c.id);
-    nextUsed = [];
+  now: number,
+): { hands: Record<Seat, number[]>; seenAt: Record<string, number> } {
+  if (game.hands[seat].length >= HAND_SIZE) return { hands: game.hands, seenAt: game.seenAt };
+  const hand = [...game.hands[seat]];
+  const seenAt = { ...game.seenAt };
+  const inHands = new Set([...game.hands.A, ...game.hands.B]);
+  const genreOf = new Map(cards.map((c) => [c.id, c.genre]));
+  const genres = new Set(hand.map((id) => genreOf.get(id)));
+  const take = (id: number) => {
+    hand.push(id);
+    inHands.add(id);
+    genres.add(genreOf.get(id));
+    seenAt[String(id)] = now;
+  };
+
+  // 1. まだ2人とも出会っていない問題（ジャンルがかぶらないものを優先）
+  const fresh = shuffled(
+    cards.filter((c) => !(String(c.id) in seenAt) && !inHands.has(c.id)),
+    random,
+  );
+  while (hand.length < HAND_SIZE && fresh.length > 0) {
+    const i = fresh.findIndex((c) => !genres.has(c.genre));
+    const [card] = fresh.splice(Math.max(i, 0), 1);
+    take(card.id);
   }
-  // Fisher–Yates で先頭 HAND_SIZE 枚だけ混ぜる
-  const ids = [...pool];
-  const n = Math.min(HAND_SIZE, ids.length);
-  for (let i = 0; i < n; i++) {
-    const j = i + Math.floor(random() * (ids.length - i));
-    [ids[i], ids[j]] = [ids[j], ids[i]];
+
+  // 2. 足りなければ、この対戦より前に出会った問題を古い順に
+  if (hand.length < HAND_SIZE) {
+    const old = shuffled(
+      cards.filter((c) => {
+        const t = seenAt[String(c.id)];
+        return t !== undefined && t < game.startedAt && !inHands.has(c.id);
+      }),
+      random,
+    ).sort((a, b) => seenAt[String(a.id)] - seenAt[String(b.id)]);
+    for (const card of old) {
+      if (hand.length >= HAND_SIZE) break;
+      take(card.id);
+    }
   }
-  return { hand: ids.slice(0, n), usedIds: nextUsed };
+
+  // 3. それでも1枚もない（問題が極端に少ない）ときは、手札にないものから
+  if (hand.length === 0) {
+    const any = cards.find((c) => !inHands.has(c.id));
+    if (any) take(any.id);
+  }
+
+  return { hands: { ...game.hands, [seat]: hand }, seenAt };
+}
+
+/** 持ち越しの手札を、存在するカードだけ・2人で重複なし・最大 HAND_SIZE 枚にそろえる */
+export function cleanHands(
+  raw: Partial<Record<Seat, unknown>> | undefined,
+  cards: readonly TriviaCard[],
+): Record<Seat, number[]> {
+  const ids = new Set(cards.map((c) => c.id));
+  const used = new Set<number>();
+  const pick = (list: unknown) => {
+    const out: number[] = [];
+    for (const id of Array.isArray(list) ? list : []) {
+      if (out.length >= HAND_SIZE) break;
+      if (typeof id === "number" && ids.has(id) && !used.has(id)) {
+        used.add(id);
+        out.push(id);
+      }
+    }
+    return out;
+  };
+  return { A: pick(raw?.A), B: pick(raw?.B) };
 }
 
 function startGame(state: RoomState, ctx: RuleContext): Game {
   const firstPlayer = resolveFirstPlayer(state.settings.firstPlayer, ctx.random);
-  const { hand, usedIds } = drawHand(ctx.cards, [], ctx.random);
+  const startedAt = ctx.now();
+  const base = {
+    hands: cleanHands(ctx.deal?.hands, ctx.cards),
+    seenAt: { ...(ctx.deal?.seenAt ?? {}) },
+    startedAt,
+  };
+  const { hands, seenAt } = refillHand(base, firstPlayer, ctx.cards, ctx.random, startedAt);
   return {
+    id: ctx.newId(),
+    startedAt,
     round: 1,
     firstPlayer,
     questioner: firstPlayer,
     phase: "select",
     scores: { A: 0, B: 0 },
-    hand,
+    hands,
+    seenAt,
     cardId: null,
     acks: [],
-    usedIds,
     history: [],
     winner: null,
   };
@@ -186,14 +310,14 @@ export function reduce(
     }
     case "selectCard": {
       if (!game || game.phase !== "select" || game.questioner !== seat) return null;
-      if (!game.hand.includes(action.cardId)) return null;
+      if (!game.hands[seat].includes(action.cardId)) return null;
       return {
         ...state,
         game: {
           ...game,
           phase: "guess",
           cardId: action.cardId,
-          usedIds: [...game.usedIds, action.cardId],
+          hands: { ...game.hands, [seat]: game.hands[seat].filter((id) => id !== action.cardId) },
         },
       };
     }
@@ -221,6 +345,8 @@ export function reduce(
         game: {
           ...game,
           scores,
+          // 回答者もこの問題に出会った
+          seenAt: { ...game.seenAt, [String(card.id)]: ctx.now() },
           history: [...game.history, turn],
           phase: winner ? "over" : "result",
           acks: [],
@@ -232,16 +358,17 @@ export function reduce(
       if (!game || game.phase !== "result" || game.acks.includes(seat)) return null;
       const acks = [...game.acks, seat];
       if (acks.length < 2) return { ...state, game: { ...game, acks } };
-      const { hand, usedIds } = drawHand(ctx.cards, game.usedIds, ctx.random);
+      const questioner = other(game.questioner);
+      const { hands, seenAt } = refillHand(game, questioner, ctx.cards, ctx.random, ctx.now());
       return {
         ...state,
         game: {
           ...game,
           round: game.round + 1,
-          questioner: other(game.questioner),
+          questioner,
           phase: "select",
-          hand,
-          usedIds,
+          hands,
+          seenAt,
           cardId: null,
           acks: [],
         },
@@ -279,15 +406,19 @@ function isSeat(v: unknown): v is Seat {
 
 function isGame(g: Partial<Game>): g is Game {
   return (
+    typeof g.id === "string" &&
+    typeof g.startedAt === "number" &&
     typeof g.round === "number" &&
     isSeat(g.questioner) &&
     isSeat(g.firstPlayer) &&
     (g.phase === "select" || g.phase === "guess" || g.phase === "result" || g.phase === "over") &&
     typeof g.scores?.A === "number" &&
     typeof g.scores?.B === "number" &&
-    Array.isArray(g.hand) &&
+    Array.isArray(g.hands?.A) &&
+    Array.isArray(g.hands?.B) &&
+    !!g.seenAt &&
+    typeof g.seenAt === "object" &&
     Array.isArray(g.acks) &&
-    Array.isArray(g.usedIds) &&
     Array.isArray(g.history) &&
     (g.winner === null || isSeat(g.winner))
   );
