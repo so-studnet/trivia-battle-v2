@@ -73,7 +73,7 @@ Supabase の無料枠はプロジェクトが2つまでなので、1つのプロ
 src/
   app/            layout・page・manifest・icon、api/feedback（フィードバックの受け付け）
   components/     TriviaApp（画面の切り替え）、LoginScreen、TitleScreen、LobbyScreen、GameScreen、StatsScreen、FeedbackDialog、ui
-  data/trivia.json 雑学300問（旧版の120問 + 追加180問、8ジャンル）
+  data/trivia.json 雑学500問（旧版の120問 + 追加380問、8ジャンル）。`src/lib/trivia.test.ts` で重複・ジャンル・本当とウソの偏りを確かめる
   lib/
     domain/game.ts       ルール（純粋関数）とテスト。出会った問題・手札の持ち越しを含む
     domain/stats.ts      成績の集計
