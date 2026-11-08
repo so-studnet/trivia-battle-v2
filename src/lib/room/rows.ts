@@ -1,5 +1,5 @@
 import { normalizeRoomState } from "@/lib/domain/game";
-import { type Room, RoomError } from "./types";
+import { type Player, type Room, RoomError } from "./types";
 
 /** trivia_battle_* の RPC が返す部屋（token は含まない） */
 export interface RoomRow {
@@ -36,6 +36,21 @@ export function toRoomError(error: { message?: string; code?: string } | null | 
   if (msg.includes("invalid_name")) return new RoomError("invalid_name");
   if (msg.includes("invalid_code")) return new RoomError("invalid_code");
   if (msg.includes("not_member")) return new RoomError("not_found");
+  if (msg.includes("invalid_email")) return new RoomError("invalid_email");
+  if (msg.includes("invalid_message")) return new RoomError("invalid_message");
+  if (msg.includes("not_logged_in")) return new RoomError("not_logged_in");
+  if (msg.includes("too_many")) return new RoomError("too_many");
   if (/fetch|network|Failed to fetch|Load failed/i.test(msg)) return new RoomError("network");
   return new RoomError("unknown", msg || undefined);
+}
+
+/** RPC が返すプレイヤー */
+export interface PlayerRow {
+  id: string;
+  email: string;
+  nickname: string;
+}
+
+export function rowToPlayer(row: PlayerRow): Player {
+  return { id: row.id, email: row.email, nickname: row.nickname };
 }

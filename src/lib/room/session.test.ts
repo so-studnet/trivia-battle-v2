@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { initialRoomState, type RoomState, type TriviaCard } from "@/lib/domain/game";
+import { type DealInfo, initialRoomState, type RoomState, type TriviaCard } from "@/lib/domain/game";
+import type { StatsData } from "@/lib/domain/stats";
 import { RoomSession } from "./session";
-import { type Room, RoomError, type RoomClient } from "./types";
+import { type LoginResult, type Player, type Room, RoomError, type RoomClient } from "./types";
 
 const cards: TriviaCard[] = Array.from({ length: 8 }, (_, i) => ({
   id: i + 1,
   text: `雑学${i + 1}`,
   isTrue: i % 2 === 0,
   explanation: "",
+  genre: "animals",
 }));
 
 /** 2人で共有するメモリ上の「サーバー」 */
@@ -32,13 +34,34 @@ class FakeServer {
 
 class FakeClient implements RoomClient {
   readonly kind = "local" as const;
+  deal: DealInfo = { seenAt: {}, hands: { A: [], B: [] } };
+  loggedIn = true;
   constructor(
     private server: FakeServer,
     private uid: string,
   ) {}
-  async init() {
-    return this.uid;
+  private get player(): Player {
+    return { id: this.uid, email: `${this.uid}@example.com`, nickname: this.uid };
   }
+  async restoreLogin() {
+    return this.loggedIn ? this.player : null;
+  }
+  async login(): Promise<LoginResult> {
+    return { status: "ok", player: this.player };
+  }
+  async register() {
+    return this.player;
+  }
+  async logout() {
+    this.loggedIn = false;
+  }
+  async getDealInfo() {
+    return this.deal;
+  }
+  async getStats(): Promise<StatsData> {
+    return { answers: [], games: [], seenCount: 0 };
+  }
+  async sendFeedback() {}
   async createRoom(name: string) {
     const room: Room = {
       id: "r1",
@@ -66,6 +89,7 @@ class FakeClient implements RoomClient {
     return this.server.rooms.get(id) ?? null;
   }
   async saveState(room: Room, state: RoomState) {
+    if (!this.loggedIn) throw new RoomError("not_logged_in");
     const cur = this.server.rooms.get(room.id);
     if (!cur || cur.version !== room.version) return null;
     const next = { ...cur, state, version: cur.version + 1 };
@@ -94,11 +118,14 @@ class FakeClient implements RoomClient {
 
 async function setup() {
   const server = new FakeServer();
-  const host = new RoomSession(new FakeClient(server, "host"), cards, () => 0);
+  const hostClient = new FakeClient(server, "host");
+  const host = new RoomSession(hostClient, cards, () => 0);
   const guest = new RoomSession(new FakeClient(server, "guest"), cards, () => 0);
+  await host.restore();
+  await guest.restore();
   await host.createRoom("ホスト");
   await guest.joinRoom("1234", "ゲスト");
-  return { server, host, guest };
+  return { server, host, guest, hostClient };
 }
 
 describe("RoomSession", () => {
@@ -129,7 +156,7 @@ describe("RoomSession", () => {
     await host.dispatch({ type: "start" });
     const g = guest.getSnapshot().room!.state.game!;
     expect(g.phase).toBe("select");
-    await host.dispatch({ type: "selectCard", cardId: g.hand[0] });
+    await host.dispatch({ type: "selectCard", cardId: g.hands.A[0] });
     await guest.dispatch({ type: "guess", answer: true, bet: 2 });
     expect(host.getSnapshot().room!.state.game!.phase).toBe("result");
     await host.dispatch({ type: "next" });
@@ -145,6 +172,7 @@ describe("RoomSession", () => {
     expect(host.getSnapshot().notice).toContain("ゲストさんが退出しました");
 
     const guest2 = new RoomSession(new FakeClient(server, "g2"), cards);
+    await guest2.restore();
     await guest2.joinRoom("1234", "二人目");
     host.leaveRoom();
     await Promise.resolve();
@@ -155,8 +183,36 @@ describe("RoomSession", () => {
   it("参加できないときはエラーを出す", async () => {
     const server = new FakeServer();
     const s = new RoomSession(new FakeClient(server, "x"), cards);
+    await s.restore();
     await s.joinRoom("9999", "x");
     expect(s.getSnapshot().error).toContain("見つかりませんでした");
     expect(s.getSnapshot().room).toBeNull();
+  });
+
+  it("対戦を始めるときは、サーバーから受け取った持ち越しの手札・出会った問題で配る", async () => {
+    const { host, guest, hostClient } = await setup();
+    hostClient.deal = { seenAt: { "1": 1, "2": 1, "5": 1 }, hands: { A: [3], B: [] } };
+    await host.dispatch({ type: "updateSettings", settings: { firstPlayer: "A", targetScore: 3 } });
+    await host.dispatch({ type: "setReady", ready: true });
+    await guest.dispatch({ type: "setReady", ready: true });
+    await host.dispatch({ type: "start" });
+    const hand = host.getSnapshot().room!.state.game!.hands.A;
+    expect(hand[0]).toBe(3);
+    expect(hand).toHaveLength(4);
+    expect(hand.some((id) => [1, 2, 5].includes(id))).toBe(false);
+  });
+
+  it("ログインが切れていたらログアウトしてエラーを出す", async () => {
+    const { host, hostClient } = await setup();
+    hostClient.loggedIn = false;
+    await host.dispatch({ type: "setReady", ready: true });
+    expect(host.getSnapshot().player).toBeNull();
+    expect(host.getSnapshot().room).toBeNull();
+    expect(host.getSnapshot().error).toContain("ログイン");
+  });
+
+  it("部屋をつくるとニックネームが更新される", async () => {
+    const { host } = await setup();
+    expect(host.getSnapshot().player?.nickname).toBe("ホスト");
   });
 });

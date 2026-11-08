@@ -27,6 +27,6 @@ for f in "$ROOT"/supabase/migrations/*.sql; do
 done
 for f in "$ROOT"/supabase/tests/*.test.sql; do
   # テストごとにデータを空にする
-  "${PSQL[@]}" -d app -c "truncate public.trivia_battle_rooms cascade"
+  "${PSQL[@]}" -d app -c "truncate public.trivia_battle_rooms, public.trivia_battle_players, public.trivia_battle_answers, public.trivia_battle_games, public.trivia_battle_feedback cascade"
   "${PSQL[@]}" -d app -f "$f"
 done

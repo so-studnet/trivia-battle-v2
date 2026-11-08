@@ -74,3 +74,27 @@ export function TriviaText({ text, large = false }: { text: string; large?: bool
     <p className={`font-bold leading-relaxed text-text ${large ? "text-xl sm:text-2xl" : "text-[15px]"}`}>{text}</p>
   );
 }
+
+export function Logo() {
+  return (
+    <div className="mb-4 flex justify-center gap-2" aria-hidden>
+      <span className="grid h-16 w-12 -rotate-12 place-items-center rounded-xl bg-true text-2xl font-black text-white shadow-lg">
+        ◯
+      </span>
+      <span className="grid h-16 w-12 -translate-y-2 place-items-center rounded-xl bg-primary text-2xl font-black text-white shadow-lg">
+        ?
+      </span>
+      <span className="grid h-16 w-12 rotate-12 place-items-center rounded-xl bg-false text-2xl font-black text-white shadow-lg">
+        ✕
+      </span>
+    </div>
+  );
+}
+
+export function GenreBadge({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-surface-2 px-2.5 py-0.5 text-xs font-bold text-muted">
+      {label}
+    </span>
+  );
+}
