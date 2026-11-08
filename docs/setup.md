@@ -26,6 +26,7 @@ Supabase と Vercel のダッシュボードは Claude からは操作できな�
 |---|---|
 | [`20261108000000_trivia_battle_rooms.sql`](https://github.com/so-studnet/trivia-battle-v2/blob/main/supabase/migrations/20261108000000_trivia_battle_rooms.sql) | 対戦部屋 |
 | [`20261109000000_trivia_battle_players.sql`](https://github.com/so-studnet/trivia-battle-v2/blob/main/supabase/migrations/20261109000000_trivia_battle_players.sql) | メールでのログイン・出会った問題・成績・フィードバック |
+| [`20261110000000_trivia_battle_default_target.sql`](https://github.com/so-studnet/trivia-battle-v2/blob/main/supabase/migrations/20261110000000_trivia_battle_default_target.sql) | 勝利に必要な点数の初期値を10点に |
 
 1. 左のメニューの **SQL Editor** を開き、**New query**
 2. GitHub で SQL ファイルを開き、右上の **Copy raw file**（コピーのアイコン）で中身をコピーして貼る

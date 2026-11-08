@@ -8,7 +8,7 @@ export type Bet = 1 | 2 | 3;
 
 export const MIN_TARGET = 1;
 export const MAX_TARGET = 10;
-export const DEFAULT_TARGET = 3;
+export const DEFAULT_TARGET = 10;
 export const HAND_SIZE = 4;
 export const BETS: readonly Bet[] = [1, 2, 3];
 

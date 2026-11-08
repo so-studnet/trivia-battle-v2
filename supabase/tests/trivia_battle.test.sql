@@ -82,6 +82,7 @@ do $$ declare j jsonb; begin
   j := public.trivia_battle_create_room(pg_temp.tok('a_tok'), 'あり');
   insert into v values ('room', j->>'id'), ('code', j->>'code');
   assert j->>'host_id' = pg_temp.g('a_id') and j->>'host_name' = 'あり', 'ホストになる';
+  assert j->'state'->'settings'->>'targetScore' = '10', '勝利に必要な点数の初期値は10点';
   assert public.trivia_battle_me(pg_temp.tok('a_tok'))->>'nickname' = 'あり', 'ニックネームが更新される';
   j := public.trivia_battle_join_room(pg_temp.g('code'), pg_temp.tok('b_tok'), 'ボブ');
   assert (j->>'version')::int = 2 and j->>'guest_name' = 'ボブ', 'ゲストとして入る';
