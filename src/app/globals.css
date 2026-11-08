@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f5f3ff;
+  --bg-accent: #ede9fe;
+  --surface: #ffffff;
+  --surface-2: #f4f4f8;
+  --text: #1c1830;
+  --muted: #625c7a;
+  --border: #e3e0ef;
+  --primary: #6d28d9;
+  --primary-strong: #5b21b6;
+  --on-primary: #ffffff;
+  --true: #059669;
+  --true-soft: #d1fae5;
+  --false: #e11d48;
+  --false-soft: #ffe4e6;
+  --gold: #f59e0b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #120f24;
+    --bg-accent: #1d1838;
+    --surface: #1f1b36;
+    --surface-2: #29244a;
+    --text: #f1eefc;
+    --muted: #aaa3c9;
+    --border: #36305c;
+    --primary: #8b5cf6;
+    --primary-strong: #a78bfa;
+    --on-primary: #ffffff;
+    --true: #34d399;
+    --true-soft: #0f3b2e;
+    --false: #fb7185;
+    --false-soft: #4a1726;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-on-primary: var(--on-primary);
+  --color-true: var(--true);
+  --color-true-soft: var(--true-soft);
+  --color-false: var(--false);
+  --color-false-soft: var(--false-soft);
+  --color-gold: var(--gold);
+  --font-sans: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI",
+    "Meiryo", system-ui, sans-serif;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, var(--bg-accent), transparent 60%),
+    radial-gradient(900px 500px at 110% 10%, var(--bg-accent), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* カードを配るアニメーション */
+@keyframes deal {
+  from {
+    opacity: 0;
+    transform: translateY(24px) rotate(-6deg) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-deal {
+  animation: deal 0.45s cubic-bezier(0.2, 0.8, 0.2, 1.1) both;
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-pop {
+  animation: pop 0.4s ease-out both;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.3s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-deal,
+  .animate-pop,
+  .animate-fade-up {
+    animation: none;
+  }
+}
