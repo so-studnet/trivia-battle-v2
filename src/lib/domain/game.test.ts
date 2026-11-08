@@ -83,6 +83,10 @@ function playTurn(s: RoomState, bet: 1 | 2 | 3 = 1, c: RuleContext = ctx): RoomS
 }
 
 describe("ロビー", () => {
+  it("勝利に必要な点数の初期値は10点", () => {
+    expect(initialRoomState().settings.targetScore).toBe(10);
+  });
+
   it("両者が準備完了ならホストが開始でき、先攻に手札が配られる", () => {
     const s = started("B");
     expect(s.game?.phase).toBe("select");
