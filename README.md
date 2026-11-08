@@ -21,10 +21,11 @@ v2 では **Next.js + Supabase + Vercel** で作り直し、サーバーの管�
 | | 旧版 | v2 |
 |---|---|---|
 | サーバー | Java（HttpServer）を自分で動かす | なし（Supabase と Vercel） |
-| 相手の操作の受け取り | 0.1〜0.5秒ごとに問い合わせ | Supabase Realtime で届いたらすぐ反映 |
+| 相手の操作の受け取り | 0.1〜0.5秒ごとに問い合わせ | Supabase Realtime（Broadcast）で届いたらすぐ反映 |
 | 部屋の状態 | サーバーのメモリ（再起動で消える） | Supabase の DB（再読み込みしても部屋に戻れる） |
 | ゲームの進行 | 各端末がそれぞれ計算 | 共有の状態をルールの関数で更新し、version で同時更新を検出 |
-| 不正対策 | なし | RLS で部屋のメンバーだけが読み書き可。列の権限で名前などは書き換え不可 |
+| 不正対策 | なし | テーブルは直接読み書きできず、RPC で合言葉（token）を確かめる。部屋のメンバーだけが読み書き可 |
+| Supabase | | ほかのアプリと同じプロジェクトに同居できる（名前は `trivia_battle_`、Auth の設定は変えない） |
 | その他 | | 招待リンク・共有、スマホ向けデザイン、ダークモード、相手の退出の通知、もう一度あそぶ |
 
 ## 開発
@@ -39,7 +40,7 @@ npm run dev        # http://localhost:3000
 
 ```bash
 npm test           # ルールと通信まわりの単体テスト (Vitest)
-npm run test:db    # マイグレーションと RLS のテスト（PostgreSQL 15 以上が必要）
+npm run test:db    # マイグレーションと RPC・権限のテスト（PostgreSQL 15 以上が必要）
 npm run check      # テスト・lint・型チェック・DB テスト・ビルドをまとめて
 ```
 

@@ -1,7 +1,7 @@
 import { normalizeRoomState } from "@/lib/domain/game";
 import { type Room, RoomError } from "./types";
 
-/** public.rooms の1行 */
+/** trivia_battle_* の RPC が返す部屋（token は含まない） */
 export interface RoomRow {
   id: string;
   code: string;
@@ -35,7 +35,7 @@ export function toRoomError(error: { message?: string; code?: string } | null | 
   if (msg.includes("room_full")) return new RoomError("full");
   if (msg.includes("invalid_name")) return new RoomError("invalid_name");
   if (msg.includes("invalid_code")) return new RoomError("invalid_code");
-  if (msg.includes("not_authenticated") || error?.code === "PGRST301") return new RoomError("auth");
+  if (msg.includes("not_member")) return new RoomError("not_found");
   if (/fetch|network|Failed to fetch|Load failed/i.test(msg)) return new RoomError("network");
   return new RoomError("unknown", msg || undefined);
 }

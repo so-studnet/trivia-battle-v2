@@ -11,7 +11,8 @@
 
 - ゲームのルールは `src/lib/domain/game.ts` の純粋関数（`reduce`）に置き、Vitest でテストする。画面や通信に書かない
 - 画面の文言は日本語。スマホ幅を前提にする
-- DB を変えるときは `supabase/migrations/` に新しいファイルを足す（適用済みのファイルは書き換えない）。RLS と権限のテストを `supabase/tests/` に書く
+- Supabase のプロジェクトはほかのアプリと共有している。テーブル・関数などの名前は必ず `trivia_battle_` で始め、Auth やプロジェクト全体の設定に頼らない
+- DB を変えるときは `supabase/migrations/` に新しいファイルを足す（適用済みのファイルは書き換えない）。RPC と権限のテストを `supabase/tests/` に書く
 - 仕様を変えたら docs も更新する
 
 ## コミット前

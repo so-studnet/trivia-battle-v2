@@ -19,7 +19,8 @@ export function getRoomClient(): RoomClient {
     url && key
       ? new SupabaseRoomClient(
           createClient(url, key, {
-            auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+            // Supabase Auth は使わない（同じプロジェクトのほかのアプリのログインとも混ざらない）
+            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
           }),
         )
       : new LocalRoomClient();

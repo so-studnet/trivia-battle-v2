@@ -5,19 +5,20 @@
 | M0 | 要件・構成のドキュメント、Next.js の土台 | 完了 |
 | M1 | ルールの純粋関数（出題・回答・賭け点・勝敗・先攻・手札）とテスト | 完了 |
 | M2 | 画面（タイトル・準備・対戦・結果）。お試しモード（同じブラウザの別タブ）で通しで遊べる | 完了 |
-| M3 | Supabase：部屋のテーブル・RLS・RPC・Realtime、匿名サインイン、同時更新の再試行、再読み込みで復帰 | 実装完了（本番の Supabase での確認は未） |
+| M3 | Supabase：部屋のテーブル・RPC・Realtime Broadcast、同時更新の再試行、再読み込みで復帰 | 実装完了（本番の Supabase での確認は未） |
+| M3.1 | ほかのアプリと同じ Supabase プロジェクトに同居できるようにする（`trivia_battle_` の名前、Auth を使わない） | 実装完了 |
 | M4 | Vercel で公開 | 未（利用者の設定が必要。docs/setup.md） |
 
 ## 確認済み
 
 - Vitest：ルール・RoomSession（同時更新の再試行・退出）・Supabase クライアント（呼び出しの形・エラー変換）
-- PostgreSQL 16：マイグレーションと RLS・列の権限・RPC のテスト
+- PostgreSQL 16：マイグレーションと権限・RPC のテスト（テーブルを直接読めない、token なし・部外者は読めない／保存できない、同時更新の検出、退出、閉じた部屋）
 - Playwright：お試しモードで2タブを使い、作成 → 招待リンクで参加 → 設定 → 準備 → 対戦（複数ターン）→ 終了 → 再読み込みで復帰 → もう一度 → 退出の通知 → 存在しないコード。ライト・ダーク両方
-- Playwright：Supabase の通信を模倣して、匿名サインイン・RPC・version 付き更新・再読み込みでの復帰・退出
+- Playwright：Supabase の RPC と Realtime（WebSocket・REST の Broadcast）を模倣して、別端末2台で作成 → 参加 → 対戦（終了まで）→ 再読み込みで復帰 → ホスト退出の通知まで。相手の画面は Broadcast で 0.1 秒以内に変わった
 
 ## 未確認
 
-- 本物の Supabase での Realtime の到達（RLS 付きの postgres_changes）と匿名サインイン
+- 本物の Supabase での Realtime Broadcast の到達
 - 実機（iPhone / Android）での表示
 
 ## 今後の候補
@@ -25,4 +26,4 @@
 - 相手がオンラインかどうかの表示（Realtime Presence）
 - 雑学の追加・ジャンル分け
 - 回答の制限時間
-- 古い匿名ユーザーの定期的な削除（pg_cron）
+- 古い部屋の定期的な削除（今は新しい部屋をつくるときに片付けている）

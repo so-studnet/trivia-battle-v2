@@ -17,7 +17,7 @@ step "型チェック"
 npm run typecheck --silent
 
 if [ "${SKIP_DB:-}" != "1" ]; then
-  step "DB テスト (マイグレーションと RLS)"
+  step "DB テスト (マイグレーションと RPC・権限)"
   npm run test:db --silent
 fi
 

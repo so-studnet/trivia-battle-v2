@@ -19,7 +19,6 @@ export type RoomErrorCode =
   | "full"
   | "invalid_name"
   | "invalid_code"
-  | "auth"
   | "network"
   | "unknown";
 
@@ -28,7 +27,6 @@ const MESSAGES: Record<RoomErrorCode, string> = {
   full: "その部屋はすでに2人そろっています。",
   invalid_name: `名前は1〜${MAX_NAME_LENGTH}文字で入力してください。`,
   invalid_code: "部屋コードは4桁の数字で入力してください。",
-  auth: "サーバーに接続できませんでした（匿名ログインに失敗）。少し待ってからやり直してください。",
   network: "通信に失敗しました。電波の良いところでやり直してください。",
   unknown: "うまくいきませんでした。もう一度お試しください。",
 };
@@ -47,7 +45,7 @@ export class RoomError extends Error {
 export interface RoomClient {
   /** 「Supabase」か「このブラウザ内だけ」か */
   readonly kind: "supabase" | "local";
-  /** 自分のユーザー ID を返す（必要なら匿名ログインする） */
+  /** この端末のプレイヤー ID を返す */
   init(): Promise<string>;
   createRoom(name: string): Promise<Room>;
   joinRoom(code: string, name: string): Promise<Room>;
